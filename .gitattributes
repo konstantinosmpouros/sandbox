@@ -1,0 +1,7 @@
+# Everything is LF in the repo and on checkout: these files run on Linux
+# (Dennis, CI), and a CRLF shell script breaks there.
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.tar.gz binary

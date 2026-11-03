@@ -1,0 +1,16 @@
+.env
+secrets/
+tls/
+results/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# SSH deploy keys: the private key lives only in the DENNIS_SSH_KEY repo secret.
+gha_*
+*.pem

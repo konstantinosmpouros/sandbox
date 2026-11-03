@@ -1,0 +1,52 @@
+# The sandbox runner on Dennis. Plain Compose, not a Swarm stack: Swarm ignores
+# `privileged`, so the inner dockerd (dind) never starts there. Fixed project
+# name, so it doesn't follow the folder. Deployed by CD from the repo clone in
+# /opt/sandbox/repo (deploy/dennis-deploy.sh); runbook: CLAUDE.md § CD to Dennis.
+#
+# The image tag below IS the release: when this file changes on main, the
+# pipeline publishes the tag to GHCR, then deploys it. Patch bumps only.
+name: sandbox
+
+services:
+
+  sandbox_runner: # 8090
+    container_name: sandbox_runner
+    image: ghcr.io/konstantinosmpouros/sandbox_runner:v0.1.0
+    privileged: true
+    environment:
+      # Secrets as files (0400, owned 1000: uvicorn runs as uid 1000). Same
+      # values as magenticx's Swarm secrets magenticx_trusted_proxy_secret and
+      # magenticx_log_redaction_secret.
+      - TRUSTED_PROXY_SECRET_FILE=/app/secrets/trusted_proxy_secret
+      - LOG_REDACTION_SECRET_FILE=/app/secrets/log_redaction_secret
+      - LOG_FORMAT=json
+      - ENVIRONMENT=production
+      # REQUIRE_TLS / REQUIRE_MTLS are left at their fail-closed default (true):
+      # no tls.crt/tls.key/ca.crt readable by uid 1000 → the runner refuses to start.
+    volumes:
+      # tls.crt + tls.key (SAN DNS:sandbox_runner, signed by the magenticx
+      # internal CA) and that ca.crt, owned 1000.
+      - /opt/sandbox/tls:/app/tls:ro
+      - /opt/sandbox/secrets:/app/secrets:ro
+    # In memory, so every start is clean: a restarted (not re-created) dind
+    # keeps stale PID files and its dockerd never comes up (MCP gateway, 2026-10-02).
+    tmpfs:
+      - /run
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 40s
+      start_period: 90s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - sandbox
+    # No ports: only agents reaches it, over the `sandbox` overlay.
+
+
+networks:
+  # Overlay, attachable, internal — created once by hand (CLAUDE.md § Dennis);
+  # magenticx's Swarm stack joins it as external too.
+  sandbox:
+    external: true
+    name: sandbox

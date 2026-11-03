@@ -1,0 +1,20 @@
+# The image is built from the project root (runner/Dockerfile COPYs runner/,
+# box/ and spike/). Allowlist: only those three folders enter the build
+# context, so secrets, TLS material, .env, tests, .venv and spike results never
+# can.
+*
+!runner/
+!box/
+!spike/
+
+# …and not their caches or local leftovers.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/results/
+**/*.pem
+**/*.key
+**/*.crt
+**/tls/
+**/.env
+**/.env.*

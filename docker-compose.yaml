@@ -1,0 +1,51 @@
+# Local sandbox runner. Joins mAgenticX's `sandbox_net`, which the magenticx
+# stack creates (internal: true) — start magenticx first. magenticx boots
+# without this project; `execute` calls then fail closed (no runner, no run).
+#
+#   docker compose up -d --build
+#
+# TRUSTED_PROXY_SECRET comes from ./.env (gitignored; copy .env.example) and
+# must equal magenticx's, or agents' calls are refused with 401.
+name: sandbox
+
+services:
+
+  sandbox_runner: # 8090
+    # Runs the agents' `execute` calls (plan 11): one throwaway gVisor box per
+    # command — no network, read-only input, non-root, hard limits. Its own
+    # Docker daemon (dind) is why it is privileged. Only agents reaches it, on
+    # sandbox_net; no host port. Local is plaintext (as every local hop in
+    # magenticx); Dennis requires TLS + mTLS (docker-compose-denis.yaml).
+    container_name: sandbox_runner
+    image: sandbox_runner
+    build:
+      # The project root: runner/Dockerfile also COPYs box/ and spike/.
+      context: .
+      dockerfile: runner/Dockerfile
+    privileged: true
+    environment:
+      - TRUSTED_PROXY_SECRET=${TRUSTED_PROXY_SECRET:?set TRUSTED_PROXY_SECRET in .env (same value as magenticx)}
+      - SANDBOX_REQUIRE_TLS=false
+      - SANDBOX_REQUIRE_MTLS=false
+      - LOG_FORMAT=${LOG_FORMAT:-console}
+    # In memory, so every start is clean (the MCP gateway's lesson: a restarted
+    # dind keeps stale PID files and never comes up).
+    tmpfs:
+      - /run
+    healthcheck:
+      test: ["CMD", "python", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 40s
+      start_period: 90s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - sandbox_net
+
+
+networks:
+  # Owned by magenticx (internal: no route out). Its compose must give it the
+  # fixed name `sandbox_net`.
+  sandbox_net:
+    external: true
+    name: sandbox_net
