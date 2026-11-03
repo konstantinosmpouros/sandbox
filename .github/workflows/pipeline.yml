@@ -285,6 +285,9 @@ jobs:
       needs.release.outputs.deploy == 'true'
       && github.repository == 'konstantinosmpouros/sandbox'
       && github.actor == github.repository_owner
+    # Secrets scoped to the `production` environment (main only, no reviewers):
+    # only this job, on main, can read the deploy key. No approval step.
+    environment: production
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     concurrency:

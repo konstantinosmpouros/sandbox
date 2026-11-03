@@ -24,4 +24,4 @@ cp .env.example .env   # same TRUSTED_PROXY_SECRET as magenticx
 docker compose up -d --build
 ```
 
-Production runs on Dennis with plain `docker compose` (`docker-compose-denis.yaml`). See [CLAUDE.md](CLAUDE.md) for the deploy runbook.
+Production runs on Dennis with plain `docker compose` (`docker-compose-denis.yaml`). CI/CD ([`.github/workflows/pipeline.yml`](.github/workflows/pipeline.yml)) builds, scans, publishes and deploys it; the operational runbook is kept privately.
