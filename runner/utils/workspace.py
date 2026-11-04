@@ -224,14 +224,24 @@ def collect_outputs(ws: Workspace, *, max_file: int, max_total: int) -> Collecte
     return CollectedOutputs(files=files, truncated=truncated, out_bytes=total_out)
 
 
-def _force_writable(func, path, _exc) -> None:
-    """rmtree error hook: the box may have chmod-ed a dir shut; reopen it and retry."""
+def _force_writable(_func, path, _exc) -> None:
+    """rmtree error hook: the box may have chmod-ed a dir shut; reopen it and retry.
+
+    The failing call is NOT replayed: which function rmtree reports differs by
+    Python version (3.12.15 reports ``os.open`` for a dir it can't enter, and
+    ``os.open(path)`` without flags is a TypeError). The path is reopened and
+    removed directly instead: a dir with its own rmtree (whose contents are now
+    reachable), anything else with ``unlink``. A dir whose mode can't be fixed
+    is left for the boot-time sweep rather than retried forever.
+    """
     try:
-        parent = os.path.dirname(path)
-        os.chmod(parent, _DIR_MODE)
+        os.chmod(os.path.dirname(path), _DIR_MODE)
         if os.path.isdir(path) and not os.path.islink(path):
             os.chmod(path, _DIR_MODE)
-        func(path)
+            if os.access(path, os.R_OK | os.W_OK | os.X_OK):
+                shutil.rmtree(path, onexc=_force_writable)
+        elif os.path.lexists(path):
+            os.unlink(path)
     except OSError:
         pass
 
@@ -240,7 +250,7 @@ def remove_workspace(ws: Workspace) -> None:
     """Delete the call dir; never raises (the boot-time sweep is the backstop)."""
     try:
         shutil.rmtree(ws.call_dir, onexc=_force_writable)
-    except OSError:
+    except Exception:  # noqa: BLE001 — cleanup must never fail a call
         security_logger.error("sandbox_workspace_cleanup_failed", "Could not remove a call dir", call=ws.call_dir.name)
 
 
