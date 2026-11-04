@@ -342,7 +342,7 @@ jobs:
       # Tailscale secret is stored: GitHub's OIDC token for THIS repo's
       # `production` environment is exchanged for the node key (workload
       # identity federation; the Tailscale credential's subject pins
-      # repo:konstantinosmpouros/sandbox:environment:production). The tailnet
+      # repo:konstantinosmpouros@72822746/sandbox@1444619536:environment:production). The tailnet
       # policy lets tag:ci reach only tag:dennis on tcp/22. The node is removed
       # when the job ends.
       - name: Join the tailnet (ephemeral, tag:ci)
