@@ -295,6 +295,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      id-token: write # OIDC token → Tailscale workload identity
     steps:
       # Fail closed: only the repository owner can ship to production (also
       # covers a re-run started by someone else).
@@ -316,14 +317,18 @@ jobs:
           SSH_USER: ${{ secrets.DENNIS_SSH_USER }}
           SSH_KEY: ${{ secrets.DENNIS_SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.DENNIS_SSH_KNOWN_HOSTS }}
+          TS_CLIENT: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
         run: |
           missing=""
           [ -n "$SSH_HOST" ] || missing="$missing DENNIS_SSH_HOST"
           [ -n "$SSH_USER" ] || missing="$missing DENNIS_SSH_USER"
           [ -n "$SSH_KEY" ] || missing="$missing DENNIS_SSH_KEY"
           [ -n "$SSH_KNOWN_HOSTS" ] || missing="$missing DENNIS_SSH_KNOWN_HOSTS"
+          [ -n "$TS_CLIENT" ] || missing="$missing TS_OAUTH_CLIENT_ID"
+          [ -n "$TS_AUDIENCE" ] || missing="$missing TS_AUDIENCE"
           if [ -n "$missing" ]; then
-            echo "::error::Repository secret(s) not set:$missing (Settings → Secrets and variables → Actions → Repository secrets)."
+            echo "::error::Secret(s) not set in the production environment:$missing (Settings → Environments → production → Environment secrets)."
             exit 1
           fi
           umask 077
@@ -331,6 +336,22 @@ jobs:
           mkdir -p "$dir"
           printf '%s\n' "$SSH_KEY" > "$dir/id_ed25519"
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$dir/known_hosts"
+
+      # Dennis' SSH is closed to the internet (OCI firewall: home IP only), so
+      # the job joins the tailnet as an ephemeral node tagged `tag:ci`. No
+      # Tailscale secret is stored: GitHub's OIDC token for THIS repo's
+      # `production` environment is exchanged for the node key (workload
+      # identity federation; the Tailscale credential's subject pins
+      # repo:konstantinosmpouros/sandbox:environment:production). The tailnet
+      # policy lets tag:ci reach only tag:dennis on tcp/22. The node is removed
+      # when the job ends.
+      - name: Join the tailnet (ephemeral, tag:ci)
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci
+          ping: ${{ secrets.DENNIS_SSH_HOST }}
 
       # The forced command ignores everything but $SSH_ORIGINAL_COMMAND (the
       # sha) and prints one line per step; its exit code is this step's.
