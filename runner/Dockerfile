@@ -24,7 +24,11 @@ COPY --from=box / /rootfs/
 RUN tar -C /rootfs --numeric-owner -czf /box-rootfs.tar.gz .
 
 # ---- the runner ----------------------------------------------------------------
-FROM docker:28.3.3-dind
+FROM docker:29.9.0-dind
+
+# Alpine fixes published after the base image was built (Trivy blocks fixable
+# CRITICALs, and the base lags behind its own repository).
+RUN apk upgrade --no-cache
 
 # gVisor, pinned to a dated release and checked against its published SHA-512.
 ARG GVISOR_RELEASE=20261012.0
