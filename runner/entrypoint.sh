@@ -3,8 +3,8 @@
 #   1. check TLS material — fail closed, like magenticx's tls/entrypoint-tls.sh;
 #   2. start the inner Docker daemon through `dind` (nested cgroup v2) on a unix
 #      socket owned by group `runner`, and wait for it;
-#   3. load the box image: import the pre-built rootfs shipped in the image, or
-#      (fallback) build it from /opt/box and flatten it the same way;
+#   3. load the box image (sandbox-box-import): the pre-built rootfs shipped
+#      in the image, or (fallback) built from /opt/box and flattened the same way;
 #   4. run the gVisor self-check — a real runsc box must report a gVisor
 #      kernel, or the runner refuses to start;
 #   5. start uvicorn as uid 1000 (TLS + mTLS unless explicitly disabled) and
@@ -18,7 +18,7 @@
 #                               SANDBOX_REQUIRE_MTLS override them for this
 #                               service only. false = local tests only.
 #   SANDBOX_PORT                default 8090
-#   SANDBOX_IMAGE               default magenticx-sandbox-box:local
+#   SANDBOX_IMAGE               default sandbox-box:local
 #   SANDBOX_CALLS_ROOT          default /var/lib/sandbox-runner/calls
 #   DOCKERD_WAIT_SECONDS        default 60
 set -eu
@@ -37,7 +37,7 @@ CA_CERT=/app/tls/ca.crt
 REQUIRE_TLS="${SANDBOX_REQUIRE_TLS:-${REQUIRE_TLS:-true}}"
 REQUIRE_MTLS="${SANDBOX_REQUIRE_MTLS:-${REQUIRE_MTLS:-true}}"
 PORT="${SANDBOX_PORT:-8090}"
-IMAGE="${SANDBOX_IMAGE:-magenticx-sandbox-box:local}"
+IMAGE="${SANDBOX_IMAGE:-sandbox-box:local}"
 CALLS_ROOT="${SANDBOX_CALLS_ROOT:-/var/lib/sandbox-runner/calls}"
 WAIT="${DOCKERD_WAIT_SECONDS:-60}"
 
@@ -79,28 +79,10 @@ docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end}}' | grep -qw ru
 log "inner dockerd up (runtimes: $(docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end}}'))"
 
 # ---- 3. the box image --------------------------------------------------------
-# `docker import` keeps only the --change settings: no ENV from the base image
-# reaches a box. The default user is nobody; the runner always passes --user.
-import_box() {
-  docker import \
-    --change 'USER 65534:65534' \
-    --change 'WORKDIR /tmp' \
-    --change 'CMD ["python3"]' \
-    "$1" "$IMAGE" >/dev/null
-}
-if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  log "box image $IMAGE already loaded"
-elif [ -r /opt/box-rootfs.tar.gz ]; then
-  log "importing the pre-built box image"
-  import_box /opt/box-rootfs.tar.gz || die "box image import failed"
-else
-  log "no pre-built box — building it from /opt/box (needs network)"
-  docker build -q -t "$IMAGE-build" /opt/box >/tmp/box-build.log 2>&1 || { tail -30 /tmp/box-build.log >&2; die "box image build failed"; }
-  cid=$(docker create "$IMAGE-build")
-  docker export "$cid" | import_box - || die "box image flatten failed"
-  docker rm "$cid" >/dev/null
-  docker rmi "$IMAGE-build" >/dev/null || true
-fi
+# The shipped rootfs, re-imported on every boot (runner/box_import.sh says why).
+sandbox-box-import "$IMAGE" || die "box image load failed"
+# The box image's name before v0.1.1. One-shot: remove in the release after it.
+docker image rm magenticx-sandbox-box:local >/dev/null 2>&1 || true
 
 # ---- the per-call temp dirs --------------------------------------------------
 # Each call stages its files in <calls root>/<uuid>/{in,out}; nothing survives a

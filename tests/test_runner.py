@@ -143,3 +143,24 @@ async def test_docker_cli_gets_a_minimal_environment(svc, cfg, ws, fake_docker, 
 )
 def test_classify(svc, kw, expected):
     assert svc.utils_runner.classify(budget=100, **kw) == expected
+
+
+async def test_sweep_removes_boxes_and_volumes_of_both_labels(svc, cfg, monkeypatch):
+    calls: list[tuple[str, ...]] = []
+    listed = {
+        ("ps", "--filter=label=sandbox.box=1"): b"aaa\n",
+        ("ps", "--filter=label=magenticx.sandbox=1"): b"bbb\naaa\n",
+        ("volume", "--filter=label=sandbox.box=1"): b"sbx-1-in\n",
+        ("volume", "--filter=label=magenticx.sandbox=1"): b"sbx-2-out\n",
+    }
+
+    async def fake_cli(_cfg, *args, timeout=30.0):
+        calls.append(args)
+        return 0, listed.get((args[0], args[-1]), b""), b""
+
+    monkeypatch.setattr(svc.utils_runner, "docker_cli", fake_cli)
+    assert await svc.utils_runner.sweep_leftovers(cfg) == 2
+    removed = [a[-1] for a in calls if a[:2] == ("rm", "--force")]
+    assert removed == ["aaa", "bbb"]
+    removed_vols = [a[3:] for a in calls if a[:3] == ("volume", "rm", "--force")]
+    assert ("sbx-1-in",) in removed_vols and ("sbx-2-out",) in removed_vols

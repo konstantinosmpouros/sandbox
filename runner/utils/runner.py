@@ -30,7 +30,13 @@ from typing import Any
 from core.logging import get_logger
 from core.settings import SandboxSettings
 from schema import ExecResponse, KilledReason
-from utils.docker_args import CONTAINER_LABEL, build_exec_args, new_container_name, volume_names
+from utils.docker_args import (
+    CONTAINER_LABEL,
+    LEGACY_CONTAINER_LABEL,
+    build_exec_args,
+    new_container_name,
+    volume_names,
+)
 from utils.output import CappedBuffer, sanitize_output
 from utils.workspace import Workspace, out_bytes
 
@@ -101,18 +107,27 @@ async def remove_container(cfg: SandboxSettings, name: str) -> None:
 
 
 async def sweep_leftovers(cfg: SandboxSettings) -> int:
-    """Remove every box a previous runner process left behind (crash mid-call)."""
-    code, out, _ = await docker_cli(cfg, "ps", "--all", "--quiet", f"--filter=label={CONTAINER_LABEL}")
-    if code != 0:
-        return 0
-    ids = [line for line in out.decode(errors="replace").split() if line]
+    """Remove every box a previous runner process left behind (crash mid-call).
+
+    Matched by label: ``CONTAINER_LABEL`` (``sandbox.box=1``) and, for one
+    release, ``LEGACY_CONTAINER_LABEL`` (``magenticx.sandbox=1``, before
+    v0.1.1). A deploy re-creates the container, but Compose carries the dind
+    image's anonymous ``/var/lib/docker`` volume over to the new one, so a box
+    orphaned by the old release can still be in the daemon at the next boot.
+    """
+    ids: list[str] = []
+    for label in (CONTAINER_LABEL, LEGACY_CONTAINER_LABEL):
+        code, out, _ = await docker_cli(cfg, "ps", "--all", "--quiet", f"--filter=label={label}")
+        if code == 0:
+            ids += [line for line in out.decode(errors="replace").split() if line and line not in ids]
     for cid in ids:
         await remove_container(cfg, cid)
-    code, out, _ = await docker_cli(cfg, "volume", "ls", "--quiet", f"--filter=label={CONTAINER_LABEL}")
-    if code == 0:
-        vols = [line for line in out.decode(errors="replace").split() if line]
-        if vols:
-            await docker_cli(cfg, "volume", "rm", "--force", *vols)
+    for label in (CONTAINER_LABEL, LEGACY_CONTAINER_LABEL):
+        code, out, _ = await docker_cli(cfg, "volume", "ls", "--quiet", f"--filter=label={label}")
+        if code == 0:
+            vols = [line for line in out.decode(errors="replace").split() if line]
+            if vols:
+                await docker_cli(cfg, "volume", "rm", "--force", *vols)
     return len(ids)
 
 

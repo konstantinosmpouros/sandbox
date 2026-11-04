@@ -1,6 +1,8 @@
 """The docker-run argument builder: every plan 11 §3.2 control on every call."""
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,7 +41,7 @@ def test_every_security_flag_is_present(svc, cfg, tmp_path):
         "--ulimit=nofile=256:256",
         f"--ulimit=fsize={100 * 1024 * 1024}:{100 * 1024 * 1024}",
         "--name=sbx-test",
-        "--label=magenticx.sandbox=1",
+        "--label=sandbox.box=1",
         "--hostname=sandbox",
     }
     assert required <= set(args)
@@ -70,7 +72,7 @@ def test_mounts_carry_nosuid_nodev_noexec_and_input_is_read_only(svc, cfg, tmp_p
     assert '"volume-opt=o=bind,nosuid,nodev,noexec,ro"' in inp
     assert inp.endswith(",readonly")
     assert "src=sbx-test-in," in inp and "src=sbx-test-out," in out
-    assert "volume-label=magenticx.sandbox=1" in inp and "volume-label=magenticx.sandbox=1" in out
+    assert "volume-label=sandbox.box=1" in inp and "volume-label=sandbox.box=1" in out
     assert "volume-nocopy" in inp and "volume-nocopy" in out
     assert f"volume-opt=device={ws.output_dir}" in out
     assert '"volume-opt=o=bind,nosuid,nodev,noexec"' in out
@@ -128,3 +130,18 @@ def test_settings_defaults_are_conservative(svc, cfg):
     assert cfg.max_output_file_bytes == 25 * 1024 * 1024
     assert cfg.max_output_total_bytes == 50 * 1024 * 1024
     assert cfg.calls_root == Path(cfg.calls_root)
+
+
+def test_boxes_carry_the_app_neutral_label(svc, cfg):
+    assert svc.utils_docker_args.CONTAINER_LABEL == "sandbox.box=1"
+    assert cfg.image == "sandbox-box:local"
+    assert "--label=sandbox.box=1" in svc.utils_docker_args.build_health_args(cfg, name="sbx-h")
+
+
+@pytest.mark.skipif(not Path("/proc/version").exists(), reason="needs a Linux /proc")
+def test_health_probe_says_not_gvisor_on_a_normal_kernel(svc):
+    # The probe that runs in the health box, run here on an ordinary kernel
+    # (the test host / container): it must not mistake it for gVisor.
+    out = subprocess.run([sys.executable, "-I", "-c", svc.utils_docker_args.HEALTH_PROBE],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert out == "NOT-GVISOR"

@@ -21,7 +21,10 @@ from pathlib import Path
 from core.settings import SandboxSettings
 from utils.workspace import Workspace
 
-CONTAINER_LABEL = "magenticx.sandbox=1"
+CONTAINER_LABEL = "sandbox.box=1"
+# The label before v0.1.1; only swept at boot (utils.runner.sweep_leftovers).
+# One-shot: remove it in the release after v0.1.1.
+LEGACY_CONTAINER_LABEL = "magenticx.sandbox=1"
 CONTAINER_PREFIX = "sbx-"
 # The only environment a box gets. Docker itself adds HOSTNAME; it is set to a
 # fixed, non-identifying name below.
@@ -109,12 +112,14 @@ def build_exec_args(
     return args
 
 
-# Run inside a health box: gVisor answers the kernel log itself with its own
-# boot lines, while a host kernel refuses a non-root reader (phase 0 probes.py).
+# Run inside a health box: the kernel the box sees must be gVisor's own
+# (``uname -r`` and /proc/version read ``<version>-gvisor``; under runc they are
+# the host kernel's). The kernel log, the phase-0 marker, is no longer usable:
+# with ``--oci-seccomp`` (daemon.json) Docker's default seccomp profile is
+# enforced inside the sandbox and refuses ``syslog`` without CAP_SYSLOG.
 HEALTH_PROBE = (
-    "import ctypes;b=ctypes.create_string_buffer(16384);"
-    "n=ctypes.CDLL(None).klogctl(3,b,16384);"
-    "print('GVISOR' if b'gvisor' in b.raw[:max(n,0)].lower() else 'NOT-GVISOR')"
+    "import os;v=open('/proc/version').read().lower();"
+    "print('GVISOR' if 'gvisor' in os.uname().release.lower() and 'gvisor' in v else 'NOT-GVISOR')"
 )
 
 

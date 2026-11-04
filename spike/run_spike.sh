@@ -1,27 +1,35 @@
 #!/bin/sh
-# Phase 0 spike (plan 11): does a gVisor sandbox work on this host, and is it
-# fast enough? Run inside the sandbox_runner image with --privileged:
+# Plan 11 phase 6: the escape-test gate, run inside the sandbox_runner image.
+# Two modes, picked automatically:
 #
-#   docker run --rm --privileged -v "$PWD/results:/results" sandbox-runner /opt/spike/run_spike.sh
+#   fresh     a new container (CI, local). Starts its own inner dockerd and
+#             loads the box image exactly as the entrypoint does:
+#               docker run --rm --privileged -v "$PWD/results:/results" <image> /opt/spike/run_spike.sh
+#   attached  inside the RUNNING runner (Dennis), whose dockerd is already up:
+#               sudo docker exec sandbox_runner /opt/spike/run_spike.sh
+#             Starts nothing, reuses the runner's loaded box image, and touches
+#             only its own boxes (removed by name) and its own dirs under
+#             $SPIKE_WORK — never the runner's boxes or call dirs.
 #
-# It starts the image's own Docker daemon, builds the sandbox image, then runs
-# containment checks under runsc and the same file-making workload under runc
-# and runsc. Writes results/summary.md; exits non-zero if any check fails.
+# The checks themselves are spike/gate.py: every box is started by the runner's
+# own code (utils.exec_service.execute), as uid 1000 like uvicorn, so flags,
+# mounts, limits and cleanup are production's. It also times the file-making
+# workload under runc and runsc. Writes $SPIKE_RESULTS/summary.md (default
+# /results), prints it, and exits non-zero if any check fails.
 set -u
 # The docker:dind base image points the CLI at tcp://docker:2375 (its sidecar
-# setup); this script talks to the daemon it starts itself, on the socket.
+# setup); the inner daemon listens on the socket.
 export DOCKER_HOST=unix:///var/run/docker.sock
 
-RESULTS=/results
+RESULTS="${SPIKE_RESULTS:-/results}"
+WORK="${SPIKE_WORK:-/var/lib/sandbox-runner/spike}"
+IMAGE="${SANDBOX_IMAGE:-sandbox-box:local}"
+PY=/opt/venv/bin/python
 mkdir -p "$RESULTS"
 SUMMARY="$RESULTS/summary.md"
-FAILED=0
 
-say() { echo "$*" | tee -a "$SUMMARY"; }
-check() {
-  # check "<name>" <0|1>: 0 means the check passed.
-  if [ "$2" -eq 0 ]; then say "| $1 | ✅ pass |"; else say "| $1 | ❌ FAIL |"; FAILED=1; fi
-}
+say() { echo "$*" >> "$SUMMARY"; }
+fail() { say ""; say "**Result: the gate could not run — $*.**"; cat "$SUMMARY"; exit 1; }
 
 : > "$SUMMARY"
 say "# Sandbox spike — $(uname -m)"
@@ -33,134 +41,52 @@ say "| Kernel | $(uname -r) |"
 if [ -e /dev/kvm ]; then say "| /dev/kvm | present |"; else say "| /dev/kvm | **absent** (as on Dennis) |"; fi
 say "| CPUs | $(nproc) |"
 say "| runsc | $(runsc --version 2>/dev/null | head -1) |"
+say "| Image | ${APP_VERSION:-dev} |"
 
 # ---- the inner daemon ------------------------------------------------------
-# Through docker:dind's `dind` wrapper, which sets up nested cgroups (v2):
-# without it no container can start inside.
-dind dockerd --host=unix:///var/run/docker.sock >/tmp/dockerd.log 2>&1 &
-i=0
-until docker info >/dev/null 2>&1; do
-  i=$((i + 1))
-  if [ "$i" -gt 60 ]; then say ""; say "Inner dockerd did not start:"; tail -30 /tmp/dockerd.log; exit 1; fi
-  sleep 1
-done
-runtimes=$(docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end}}')
-say "| Inner runtimes | $runtimes |"
-
-say ""
-say "Building the sandbox image…"
-if ! docker build -q -t sandbox /opt/box >/tmp/build.log 2>&1; then
-  say "Sandbox image build failed:"; tail -30 /tmp/build.log; exit 1
-fi
-
-OUT=/tmp/out
-# The sandbox writes as 65534 into the bind-mounted output directory.
-prepare_out() { rm -rf "$OUT"; mkdir -p "$OUT"; chmod 0777 "$OUT"; }
-
-# Every control from plan 11 §3.2, except the runtime, which each call picks.
-box() {
-  runtime="$1"; shift
-  docker run --rm --runtime="$runtime" \
-    --network none --read-only \
-    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-    -v "$OUT":/out:rw \
-    --cap-drop ALL --security-opt no-new-privileges \
-    --user 65534:65534 \
-    --pids-limit 128 --memory 1g --memory-swap 1g --cpus 2 \
-    --ulimit nofile=256:256 \
-    --env PATH=/usr/local/bin:/usr/bin:/bin --env HOME=/tmp \
-    sandbox "$@"
-}
-
-# ---- containment, under runsc ----------------------------------------------
-# Every check needs the box to RUN and say so: a box that fails to start, or
-# crashes, fails the check. (A "must fail" command alone would pass when the
-# box never started, which is exactly the false confidence to avoid.)
-say ""
-say "## Containment (runsc)"
-say ""
-say "| Check | Result | Detail |"
-say "| --- | --- | --- |"
-prepare_out
-
-probe_out=$(box runsc python /opt/probes.py 2>&1)
-if ! echo "$probe_out" | grep -q "PROBES DONE"; then
-  say "| The probe box ran | ❌ FAIL | $(echo "$probe_out" | tail -2 | tr '\n' ' ') |"
-  FAILED=1
-fi
-for name in gvisor-kernel no-network loopback-only rootfs-read-only tmp-noexec output-writable \
-            non-root no-secrets no-docker-socket host-secrets-unreadable; do
-  line=$(echo "$probe_out" | grep -E "^(PASS|FAIL) $name " | head -1)
-  detail=$(echo "$line" | sed 's/^[A-Z]* [a-z-]* — //' | tr '|' '/')
-  case "$line" in
-    PASS*) say "| $name | ✅ pass | $detail |" ;;
-    *) say "| $name | ❌ FAIL | ${detail:-no verdict printed} |"; FAILED=1 ;;
-  esac
-done
-
-# Fork bomb: the box must start (STARTED) and then end quickly, either with
-# fork() refused at the cap (CAPPED, as under runc) or with the whole sandbox
-# killed (gVisor: its own threads count against the cap, so the box dies and
-# exits non-zero). Not a pass: hanging until the timeout, or a box left behind.
-# Either way the daemon must still answer afterwards.
-bomb_start=$(date +%s)
-bomb=$(timeout 90 docker run --rm --runtime=runsc --pids-limit 64 --network none --user 65534:65534 sandbox \
-  python -c '
-import os, time
-print("STARTED", flush=True)
-n = 0
-while True:
-    try:
-        if os.fork() == 0:
-            time.sleep(30)
-            os._exit(0)
-        n += 1
-    except OSError:
-        print("CAPPED", n, flush=True)
-        os._exit(0)
-' 2>&1); bomb_status=$?
-bomb_secs=$(( $(date +%s) - bomb_start ))
-leftover=$(docker ps -aq | wc -l)
-if echo "$bomb" | grep -q STARTED && [ "$bomb_status" -ne 124 ] && [ "$leftover" -eq 0 ] \
-   && { echo "$bomb" | grep -q CAPPED || [ "$bomb_status" -ne 0 ]; } && docker info >/dev/null 2>&1; then
-  how=$(echo "$bomb" | grep CAPPED || echo "sandbox killed, exit $bomb_status")
-  say "| fork-bomb | ✅ pass | $how after ${bomb_secs}s; no box left; daemon alive |"
+if docker info >/dev/null 2>&1; then
+  MODE=attached
+  docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "the running daemon has no $IMAGE"
 else
-  say "| fork-bomb | ❌ FAIL | exit $bomb_status after ${bomb_secs}s, $leftover left: $(echo "$bomb" | tail -2 | tr '\n' ' ') |"; FAILED=1
+  MODE=fresh
+  # As the entrypoint: through docker:dind's `dind` wrapper (nested cgroup v2),
+  # socket group `runner` so the gate can drive it as uid 1000.
+  rm -f /var/run/docker.pid /var/run/docker.sock
+  dind dockerd --host=unix:///var/run/docker.sock --group=runner >/var/log/spike-dockerd.log 2>&1 &
+  i=0
+  until docker info >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -gt 60 ]; then tail -30 /var/log/spike-dockerd.log >> "$SUMMARY"; fail "the inner dockerd did not start"; fi
+    sleep 1
+  done
+  sandbox-box-import "$IMAGE" >/dev/null 2>/var/log/spike-box-import.log || fail "the box image could not be loaded"
 fi
+say "| Mode | $MODE |"
+say "| Inner runtimes | $(docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end}}') |"
+say ""
 
-# Memory: the box must start, then fail to take 1 GiB under a 256 MiB limit.
-mem=$(timeout 90 docker run --rm --runtime=runsc --memory 256m --memory-swap 256m --network none --user 65534:65534 sandbox \
-  python -c '
-print("STARTED", flush=True)
-b = bytearray(1024 * 1024 * 1024)
-b[::4096] = b"x" * len(b[::4096])
-print("ALLOCATED", flush=True)
-' 2>&1); mem_status=$?
-if echo "$mem" | grep -q STARTED && ! echo "$mem" | grep -q ALLOCATED; then
-  say "| memory-cap | ✅ pass | 1 GiB refused under 256 MiB (exit $mem_status) |"
-else
-  say "| memory-cap | ❌ FAIL | $(echo "$mem" | tail -2 | tr '\n' ' ') |"; FAILED=1
+# ---- the gate --------------------------------------------------------------
+# Its own work dir (calls root, canary), 0700 and owned by uid 1000 like the
+# runner's calls root; wiped before and after.
+case "$WORK" in
+  /*/*/*) ;;
+  *) fail "SPIKE_WORK=$WORK is too shallow to be wiped" ;;
+esac
+rm -rf "$WORK"
+mkdir -p "$WORK"
+chown 1000:1000 "$WORK"
+chmod 0700 "$WORK"
+
+SPIKE_WORK="$WORK" su-exec runner:runner "$PY" /opt/spike/gate.py >"$WORK.md" 2>"$WORK.log"
+status=$?
+cat "$WORK.md" >> "$SUMMARY"
+if [ "$status" -ne 0 ] && ! grep -q '^\*\*Gate:' "$WORK.md"; then
+  say ""; say "gate.py exited $status without a verdict:"; say '```'; tail -30 "$WORK.log" >> "$SUMMARY"; say '```'
 fi
-
-# ---- the workload, runc vs runsc -------------------------------------------
-say ""
-say "## Workload: 100k-row CSV → pandas → xlsx, chart, docx, pptx, pdf"
-say ""
-for runtime in runc runsc; do
-  prepare_out
-  start=$(date +%s)
-  result=$(box "$runtime" python /opt/workload.py /out 2>/tmp/workload.err)
-  status=$?
-  wall=$(( $(date +%s) - start ))
-  if [ $status -ne 0 ]; then
-    say "- **$runtime**: failed (exit $status): $(tail -3 /tmp/workload.err)"
-    FAILED=1
-  else
-    say "- **$runtime**: ${wall}s wall clock, in-script \`$result\`"
-  fi
-done
+cp "$WORK.log" "$RESULTS/gate.log" 2>/dev/null || true
+rm -rf "$WORK" "$WORK.md" "$WORK.log"
 
 say ""
-if [ "$FAILED" -eq 0 ]; then say "**Result: every check passed.**"; else say "**Result: at least one check FAILED.**"; fi
-exit "$FAILED"
+if [ "$status" -eq 0 ]; then say "**Result: every check passed.**"; else say "**Result: at least one check FAILED.**"; fi
+cat "$SUMMARY"
+exit "$status"

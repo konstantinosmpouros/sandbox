@@ -62,7 +62,9 @@ WORKDIR /app
 COPY runner/requirements.txt /app/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt
 
-# The inner daemon knows runsc; the platform is systrap (no KVM on Dennis).
+# The inner daemon knows runsc; the platform is systrap (no KVM on Dennis), and
+# --oci-seccomp enforces Docker's default seccomp profile inside the sandbox too
+# (without it runsc ignores it: a box could unshare a user namespace and mount).
 COPY runner/daemon.json /etc/docker/daemon.json
 
 # The box: pre-built rootfs (normal boot) and its source (fallback build, spike).
@@ -76,7 +78,8 @@ COPY runner/router/ /app/router/
 COPY runner/schema/ /app/schema/
 COPY runner/utils/ /app/utils/
 COPY runner/entrypoint.sh /usr/local/bin/sandbox-runner-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/sandbox-runner-entrypoint.sh /opt/spike/run_spike.sh
+COPY runner/box_import.sh /usr/local/bin/sandbox-box-import
+RUN chmod 0755 /usr/local/bin/sandbox-runner-entrypoint.sh /usr/local/bin/sandbox-box-import /opt/spike/run_spike.sh
 
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \

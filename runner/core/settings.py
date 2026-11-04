@@ -111,7 +111,7 @@ class SandboxSettings(BaseSettings):
     # --- Inner daemon / image ----------------------------------------------
     docker_bin: str = Field("docker", validation_alias="SANDBOX_DOCKER_BIN")
     docker_host: str = Field("unix:///var/run/docker.sock", validation_alias="SANDBOX_DOCKER_HOST")
-    image: str = Field("magenticx-sandbox-box:local", validation_alias="SANDBOX_IMAGE")
+    image: str = Field("sandbox-box:local", validation_alias="SANDBOX_IMAGE")
     runtime: str = Field("runsc", validation_alias="SANDBOX_RUNTIME")
     # The box's uid:gid — 1000 so output/ stays writable by the agents service
     # (which owns the volume as 1000) and by the box (plan 11 §4).

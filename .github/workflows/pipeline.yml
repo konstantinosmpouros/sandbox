@@ -1,8 +1,8 @@
 # CI/CD for the sandbox runner. Four jobs:
-#   test     unit tests + shellcheck of the deploy script (every push and PR)
+#   test     unit tests + shellcheck of the shell scripts (every push and PR)
 #   spike    build the image natively on ARM64 (Dennis: Ampere A1, no /dev/kvm)
-#            and on x86, then run spike/run_spike.sh under --privileged:
-#            containment checks + the file-making workload under runc and runsc
+#            and on x86, then run spike/run_spike.sh under --privileged: the
+#            plan 11 phase-6 escape-test gate (all 10 items) + the workload timing
 #   release  push to main that changed docker-compose-denis.yaml, or Run
 #            workflow: build on ARM64, re-run the spike against that exact
 #            image, Trivy (fixable CRITICAL blocks), push to GHCR, verify the
@@ -50,8 +50,8 @@ jobs:
           .venv/bin/python -m pytest
 
       # shellcheck is preinstalled on GitHub's Ubuntu runners.
-      - name: shellcheck the deploy script
-        run: shellcheck deploy/dennis-deploy.sh
+      - name: shellcheck the shell scripts
+        run: shellcheck deploy/dennis-deploy.sh runner/entrypoint.sh runner/box_import.sh spike/run_spike.sh
 
   spike:
     name: gVisor spike on ${{ matrix.runner }}

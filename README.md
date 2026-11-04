@@ -6,7 +6,7 @@ The sandbox runner for mAgenticX: it runs an agent's `execute` call — one untr
 | --- | --- |
 | `runner/` | The service (FastAPI + its own Docker daemon with `runsc`) |
 | `box/` | The image every call runs (Python 3.12 + pandas, openpyxl, matplotlib, python-docx, python-pptx, reportlab, Pillow) |
-| `spike/` | Containment + timing checks, run in CI on ARM64 and x86 |
+| `spike/` | The phase-6 escape-test gate (all 10 items, through the runner's own code) + the runc/runsc timing, run in CI on ARM64 and x86 and against the release image |
 | `tests/` | Unit tests |
 
 ```sh
