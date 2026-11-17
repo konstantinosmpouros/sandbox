@@ -22,9 +22,6 @@ from core.settings import SandboxSettings
 from utils.workspace import Workspace
 
 CONTAINER_LABEL = "sandbox.box=1"
-# The label before v0.1.1; only swept at boot (utils.runner.sweep_leftovers).
-# One-shot: remove it in the release after v0.1.1.
-LEGACY_CONTAINER_LABEL = "magenticx.sandbox=1"
 CONTAINER_PREFIX = "sbx-"
 # The only environment a box gets. Docker itself adds HOSTNAME; it is set to a
 # fixed, non-identifying name below.

@@ -5,3 +5,5 @@
 *.png binary
 *.jpg binary
 *.tar.gz binary
+# The platform skills ship byte for byte (their SOURCE pins a hash).
+box/platform_skills/** -text

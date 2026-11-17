@@ -572,7 +572,22 @@ async def workload() -> list[str]:
         else:
             lines.append(f"- **{rt}**: FAILED ({summary(r)})")
             record(10, f"workload-{rt}", False, summary(r))
+    lines.append(await toolchain())
     return lines
+
+
+async def toolchain() -> str:
+    """The document toolchain (box/toolchain_check.sh) through the runner's own
+    ``execute()`` under the gate's runtime: LibreOffice renders and recalculates,
+    poppler, Node's docx / pptxgenjs, Greek fonts, pypdf and qpdf all work
+    inside a real box. A failure fails the gate: the document skills need it."""
+    resp, _, _, audit, error = await run(request("sh /opt/toolchain_check.sh /conversation/output", timeout=180))
+    ok = resp is not None and resp.exit_code == 0 and resp.killed_reason is None and "toolchain ok" in resp.stdout
+    if not ok:
+        record(10, "toolchain", False, f"{summary(resp, error)}; stderr: {(resp.stderr if resp else '')[-400:]}")
+        return f"- **toolchain ({CFG.runtime})**: FAILED ({summary(resp, error)})"
+    checks = "; ".join(line[3:] for line in resp.stdout.splitlines() if line.startswith("ok "))
+    return f"- **toolchain ({CFG.runtime})**: {audit.get('_wall', '?')}s wall clock — {checks}"
 
 
 def render(workload_lines: list[str]) -> str:
@@ -589,7 +604,8 @@ def render(workload_lines: list[str]) -> str:
         out += [f"| {c.name} | {icon.get(c.verdict, c.verdict)} | {c.detail.replace('|', '/')} |" for c in rows]
         out.append("")
     counts = {v: sum(c.verdict == v for c in CHECKS) for v in ("PASS", "FAIL", "ACCEPTED")}
-    out += ["## Workload: 100k-row CSV → pandas → xlsx, chart, docx, pptx, pdf (runner flags)", "", *workload_lines, ""]
+    out += ["## Workload: 100k-row CSV → pandas → xlsx, chart, docx, pptx, pdf (runner flags), then the document toolchain", "",
+            *workload_lines, ""]
     out.append(f"**Gate: {counts['PASS']} passed, {counts['FAIL']} failed, {counts['ACCEPTED']} accepted exception(s).**")
     return "\n".join(out)
 

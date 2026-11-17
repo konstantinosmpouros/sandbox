@@ -10,11 +10,14 @@
 # works: `docker run --rm --privileged <image> /opt/spike/run_spike.sh`.
 
 # ---- the box: what every `execute` call runs ---------------------------------
-# Same base and the same requirements.txt as box/Dockerfile.
+# Same base, toolchain.sh and requirements.txt as box/Dockerfile.
 FROM python:3.12.11-slim-bookworm AS box
+COPY box/toolchain.sh /tmp/box-toolchain.sh
+RUN sh /tmp/box-toolchain.sh && rm -f /tmp/box-toolchain.sh
 COPY box/requirements.txt /tmp/box-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/box-requirements.txt && rm /tmp/box-requirements.txt
-COPY box/workload.py box/probes.py /opt/
+COPY box/workload.py box/probes.py box/toolchain_check.sh /opt/
+COPY box/platform_skills /platform_skills
 
 # Flattened to a rootfs tarball: the runner `docker import`s it at boot, which
 # drops every ENV the base image set — a box's environment is exactly the

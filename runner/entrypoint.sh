@@ -81,8 +81,6 @@ log "inner dockerd up (runtimes: $(docker info --format '{{range $k, $v := .Runt
 # ---- 3. the box image --------------------------------------------------------
 # The shipped rootfs, re-imported on every boot (runner/box_import.sh says why).
 sandbox-box-import "$IMAGE" || die "box image load failed"
-# The box image's name before v0.1.1. One-shot: remove in the release after it.
-docker image rm magenticx-sandbox-box:local >/dev/null 2>&1 || true
 
 # ---- the per-call temp dirs --------------------------------------------------
 # Each call stages its files in <calls root>/<uuid>/{in,out}; nothing survives a
