@@ -60,12 +60,15 @@ SKILLS = ROOT / "box" / "platform_skills"
 
 
 def _tree_hash(root: Path) -> str:
-    """The same hash as magenticx's scripts/platform_skills.py (SOURCE excluded)."""
+    """The same hash as magenticx's scripts/platform_skills.py (SOURCE excluded),
+    ordered by the path string: ``Path`` objects sort case-insensitively on
+    Windows and case-sensitively on Linux."""
     digest = hashlib.sha256()
-    files = sorted(p for p in root.rglob("*") if p.is_file() and p.name != "SOURCE" and "__pycache__" not in p.parts)
-    for path in files:
-        digest.update(path.relative_to(root).as_posix().encode() + b"\0")
-        digest.update(path.read_bytes() + b"\0")
+    files = {p.relative_to(root).as_posix(): p for p in root.rglob("*")
+             if p.is_file() and p.name != "SOURCE" and "__pycache__" not in p.parts}
+    for rel in sorted(files):
+        digest.update(rel.encode() + b"\0")
+        digest.update(files[rel].read_bytes() + b"\0")
     return digest.hexdigest()
 
 
